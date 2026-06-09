@@ -2,99 +2,169 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>AI 美学测评</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    /* 样式沿用之前的 H5 美化版，这里省略以节省篇幅，请保留你之前的 CSS */
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f0ff;display:flex;justify-content:center;padding:20px;min-height:100vh}
-    .card{background:#fff;border-radius:24px;padding:24px;box-shadow:0 10px 40px rgba(124,58,237,.1);width:100%;max-width:420px;margin-bottom:20px}
-    .header{text-align:center;margin-bottom:24px}
-    .header h1{font-size:26px;background:linear-gradient(135deg,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-    .upload-area{border:2px dashed #d8b4fe;border-radius:16px;padding:40px 20px;text-align:center;cursor:pointer}
-    .btn{width:100%;padding:16px;border:none;border-radius:16px;background:linear-gradient(135deg,#8b5cf6,#a855f7);color:#fff;font-size:17px;font-weight:600;margin-top:20px;cursor:pointer}
-    .spinner{display:none;text-align:center;padding:30px}
-    .spinner div{width:40px;height:40px;border:4px solid #e9d5ff;border-top-color:#7c3aed;border-radius:50%;animation:spin 1s linear infinite;margin:auto}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    #resultCard{display:none}
-    .error{color:red;text-align:center;padding:50px 20px;font-size:18px}
+    :root {
+      --primary: #7c3aed;
+      --bg: #f5f0ff;
+      --card: #ffffff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { background: var(--bg); display: flex; justify-content: center; padding: 20px; min-height: 100vh; }
+    .container { width: 100%; max-width: 420px; }
+    .header { text-align: center; margin-bottom: 24px; }
+    .header h1 { font-size: 26px; background: linear-gradient(135deg, #a855f7, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header p { color: #666; font-size: 14px; margin-top: 4px; }
+    
+    .card { background: var(--card); border-radius: 24px; padding: 24px; box-shadow: 0 10px 40px rgba(124, 58, 237, 0.1); margin-bottom: 20px; }
+    
+    .upload-area { border: 2px dashed #d8b4fe; border-radius: 16px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s; }
+    .upload-area:hover { border-color: var(--primary); background: #faf5ff; }
+    .upload-area i { font-size: 48px; color: #a78bfa; margin-bottom: 12px; }
+    .upload-area span { color: #555; font-size: 15px; }
+    #preview { width: 100%; border-radius: 12px; margin-top: 16px; display: none; }
+    
+    .btn { width: 100%; padding: 16px; border: none; border-radius: 16px; background: linear-gradient(135deg, #8b5cf6, #a855f7); color: white; font-size: 17px; font-weight: 600; margin-top: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    
+    /* 🟢 修改：Spinner 结构，增加 statusText */
+    .spinner { display: none; text-align: center; padding: 30px; }
+    .spinner div { width: 40px; height: 40px; border: 4px solid #e9d5ff; border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #statusText { margin-top: 12px; color: #777; font-size: 14px; }
+    
+    .result-card { display: none; }
+    .result-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .avatar { width: 60px; height: 60px; background: linear-gradient(135deg, #ddd6fe, #c4b5fd); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 28px; }
+    .info h2 { font-size: 18px; color: #333; }
+    .info p { font-size: 13px; color: #777; }
+    .score-badge { margin-left: auto; background: #f3e8ff; color: var(--primary); padding: 6px 12px; border-radius: 20px; font-weight: bold; font-size: 14px; }
+    
+    .section-title { font-size: 16px; font-weight: 600; color: var(--primary); margin: 20px 0 10px; padding-left: 8px; border-left: 4px solid var(--primary); }
+    .advice-content { font-size: 14.5px; line-height: 1.8; color: #444; white-space: pre-wrap; }
+    
+    .error { color: #dc2626; text-align: center; padding: 50px 20px; font-size: 18px; }
+    .restart-btn { background: #f3e8ff; color: var(--primary); margin-top: 24px; }
   </style>
 </head>
 <body>
+  <div class="container">
+    <div class="header">
+      <h1>✨ AI 美学测评</h1>
+      <p>上传一张正脸照，解锁你的专属变美方案</p>
+    </div>
 
-<div class="card" id="uploadCard">
-  <div class="header"><h1>✨ AI 美学测评</h1><p>上传正脸照，解锁专属变美方案</p></div>
-  <div class="upload-area" id="uploadArea">
-    <p>📸 点击上传照片</p>
-    <input type="file" id="fileInput" accept="image/*" hidden>
-    <img id="preview" style="display:none;width:100%;border-radius:12px;margin-top:12px;">
+    <div class="card" id="uploadCard">
+      <div class="upload-area" id="uploadArea">
+        <i class="fas fa-camera-retro"></i>
+        <span>点击上传照片</span>
+        <input type="file" id="fileInput" accept="image/*" hidden>
+        <img id="preview" alt="Preview">
+      </div>
+      <button class="btn" id="analyzeBtn" disabled>
+        <i class="fas fa-magic"></i> 开始分析
+      </button>
+    </div>
+
+    <!-- 🟢 修改：Spinner 包含 statusText -->
+    <div class="spinner" id="spinner">
+      <div></div>
+      <p id="statusText">AI 正在为你定制方案...</p>
+    </div>
+
+    <div class="card result-card" id="resultCard">
+      <!-- 结果将动态插入这里 -->
+    </div>
   </div>
-  <button class="btn" id="analyzeBtn" disabled>开始分析</button>
-</div>
 
-<div class="spinner" id="spinner"><div></div><p style="margin-top:12px;">AI 分析中...</p></div>
-<div class="card" id="resultCard"></div>
-
-<script>
-  const params = new URLSearchParams(window.location.search);
-  const TOKEN = params.get('t');
-  
-  if (!TOKEN) {
-    document.body.innerHTML = '<div class="error">⚠️ 非法访问<br>请从订单获取专属链接</div>';
-    throw new Error("No token");
-  }
-
-  const uploadArea = document.getElementById('uploadArea');
-  const fileInput = document.getElementById('fileInput');
-  const analyzeBtn = document.getElementById('analyzeBtn');
-  const preview = document.getElementById('preview');
-  const spinner = document.getElementById('spinner');
-  const resultCard = document.getElementById('resultCard');
-  const uploadCard = document.getElementById('uploadCard');
-
-  let base64Image = '';
-
-  uploadArea.onclick = () => fileInput.click();
-  fileInput.onchange = e => {
-    const file = e.target.files[0];
-    const reader = new FileReader();
-    reader.onload = ev => {
-      base64Image = ev.target.result.split(',')[1];
-      preview.src = ev.target.result;
-      preview.style.display = 'block';
-      analyzeBtn.disabled = false;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  analyzeBtn.onclick = async () => {
-    uploadCard.style.display = 'none';
-    spinner.style.display = 'block';
-
-    try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64Image, token: TOKEN })
-      });
-      const data = await res.json();
-      
-      spinner.style.display = 'none';
-      
-      if (data.error) {
-        resultCard.innerHTML = `<div class="error">${data.error}</div>`;
-        resultCard.style.display = 'block';
-        return;
-      }
-
-      // 这里渲染你的报告（沿用之前的渲染逻辑）
-      resultCard.innerHTML = `<h2>${data.features.shape}脸 · ${data.features.age}岁</h2><p>${data.advice}</p>`;
-      resultCard.style.display = 'block';
-
-    } catch (err) {
-      spinner.style.display = 'none';
-      alert('网络错误');
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const TOKEN = params.get('t');
+    
+    if (!TOKEN) {
+      document.body.innerHTML = '<div class="error">⚠️ 非法访问<br>请从订单获取专属链接</div>';
+      throw new Error("No token");
     }
-  };
-</script>
+
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const preview = document.getElementById('preview');
+    const spinner = document.getElementById('spinner');
+    const resultCard = document.getElementById('resultCard');
+    const uploadCard = document.getElementById('uploadCard');
+
+    let base64Image = '';
+
+    uploadArea.onclick = () => fileInput.click();
+    fileInput.onchange = e => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = ev => {
+        base64Image = ev.target.result.split(',')[1];
+        preview.src = ev.target.result;
+        preview.style.display = 'block';
+        analyzeBtn.disabled = false;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    analyzeBtn.onclick = async () => {
+      uploadCard.style.display = 'none';
+      spinner.style.display = 'block';
+      document.getElementById('statusText').innerText = 'AI 正在为你定制方案...';
+
+      try {
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: base64Image, token: TOKEN })
+        });
+
+        // 🟢 新增：如果后端返回 429 (Too Many Requests)，说明正在重试
+        if (res.status === 429) {
+          document.getElementById('statusText').innerText = 'AI 服务繁忙，正在为您排队重试，请稍候...';
+          // 等待 2 秒后重新尝试（递归调用自身）
+          await new Promise(r => setTimeout(r, 2000));
+          analyzeBtn.click(); // 重新触发点击
+          return; // 终止本次执行
+        }
+
+        const data = await res.json();
+        spinner.style.display = 'none';
+
+        if (data.error) {
+          resultCard.innerHTML = `<div class="error">${data.error}</div>`;
+          resultCard.style.display = 'block';
+          return;
+        }
+
+        // 渲染结果
+        resultCard.innerHTML = `
+          <div class="result-header">
+            <div class="avatar">💄</div>
+            <div class="info">
+              <h2>${data.features.shape}脸 · ${data.features.age}岁</h2>
+              <p>基于面部黄金比例分析</p>
+            </div>
+            <div class="score-badge">${data.features.beauty}分</div>
+          </div>
+          <div class="section-title">💡 专属变美建议</div>
+          <div class="advice-content">${data.advice}</div>
+          <button class="btn restart-btn" onclick="location.reload()">
+            <i class="fas fa-redo"></i> 重新测评
+          </button>
+        `;
+        resultCard.style.display = 'block';
+
+      } catch (err) {
+        spinner.style.display = 'none';
+        resultCard.innerHTML = `<div class="error">网络错误或超时，请刷新重试</div>`;
+        resultCard.style.display = 'block';
+      }
+    };
+  </script>
 </body>
 </html>

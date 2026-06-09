@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 美学测评</title>
+  <style>
+    /* 样式沿用之前的 H5 美化版，这里省略以节省篇幅，请保留你之前的 CSS */
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f0ff;display:flex;justify-content:center;padding:20px;min-height:100vh}
+    .card{background:#fff;border-radius:24px;padding:24px;box-shadow:0 10px 40px rgba(124,58,237,.1);width:100%;max-width:420px;margin-bottom:20px}
+    .header{text-align:center;margin-bottom:24px}
+    .header h1{font-size:26px;background:linear-gradient(135deg,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .upload-area{border:2px dashed #d8b4fe;border-radius:16px;padding:40px 20px;text-align:center;cursor:pointer}
+    .btn{width:100%;padding:16px;border:none;border-radius:16px;background:linear-gradient(135deg,#8b5cf6,#a855f7);color:#fff;font-size:17px;font-weight:600;margin-top:20px;cursor:pointer}
+    .spinner{display:none;text-align:center;padding:30px}
+    .spinner div{width:40px;height:40px;border:4px solid #e9d5ff;border-top-color:#7c3aed;border-radius:50%;animation:spin 1s linear infinite;margin:auto}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #resultCard{display:none}
+    .error{color:red;text-align:center;padding:50px 20px;font-size:18px}
+  </style>
+</head>
+<body>
+
+<div class="card" id="uploadCard">
+  <div class="header"><h1>✨ AI 美学测评</h1><p>上传正脸照，解锁专属变美方案</p></div>
+  <div class="upload-area" id="uploadArea">
+    <p>📸 点击上传照片</p>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <img id="preview" style="display:none;width:100%;border-radius:12px;margin-top:12px;">
+  </div>
+  <button class="btn" id="analyzeBtn" disabled>开始分析</button>
+</div>
+
+<div class="spinner" id="spinner"><div></div><p style="margin-top:12px;">AI 分析中...</p></div>
+<div class="card" id="resultCard"></div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const TOKEN = params.get('t');
+  
+  if (!TOKEN) {
+    document.body.innerHTML = '<div class="error">⚠️ 非法访问<br>请从订单获取专属链接</div>';
+    throw new Error("No token");
+  }
+
+  const uploadArea = document.getElementById('uploadArea');
+  const fileInput = document.getElementById('fileInput');
+  const analyzeBtn = document.getElementById('analyzeBtn');
+  const preview = document.getElementById('preview');
+  const spinner = document.getElementById('spinner');
+  const resultCard = document.getElementById('resultCard');
+  const uploadCard = document.getElementById('uploadCard');
+
+  let base64Image = '';
+
+  uploadArea.onclick = () => fileInput.click();
+  fileInput.onchange = e => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = ev => {
+      base64Image = ev.target.result.split(',')[1];
+      preview.src = ev.target.result;
+      preview.style.display = 'block';
+      analyzeBtn.disabled = false;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  analyzeBtn.onclick = async () => {
+    uploadCard.style.display = 'none';
+    spinner.style.display = 'block';
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64Image, token: TOKEN })
+      });
+      const data = await res.json();
+      
+      spinner.style.display = 'none';
+      
+      if (data.error) {
+        resultCard.innerHTML = `<div class="error">${data.error}</div>`;
+        resultCard.style.display = 'block';
+        return;
+      }
+
+      // 这里渲染你的报告（沿用之前的渲染逻辑）
+      resultCard.innerHTML = `<h2>${data.features.shape}脸 · ${data.features.age}岁</h2><p>${data.advice}</p>`;
+      resultCard.style.display = 'block';
+
+    } catch (err) {
+      spinner.style.display = 'none';
+      alert('网络错误');
+    }
+  };
+</script>
+</body>
+</html>

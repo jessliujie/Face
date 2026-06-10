@@ -17,7 +17,6 @@ export default async function handler(req, res) {
     headers: { Authorization: `Bearer ${process.env.UPSTASH_TOKEN}` }
   });
 
-  // 检查 Token 是否存在及状态
   const tokenRes = await (await REDIS(`/get/${encodeURIComponent(`token:${token}`)}`)).json();
   const tokenVal = tokenRes.result;
 
@@ -29,24 +28,18 @@ export default async function handler(req, res) {
   // ==========================================================
   const today = new Date().toISOString().split('T')[0];
   const limitKey = `limit:daily:${today}`;
-  const DAILY_MAX = 200; // 🔥 已改为 200 次
+  const DAILY_MAX = 200;
 
   try {
     const countRes = await (await REDIS(`/get/${encodeURIComponent(limitKey)}`)).json();
     const currentCount = parseInt(countRes.result || '0');
-
     if (currentCount >= DAILY_MAX) {
       return res.status(429).json({ error: `今日服务已达上限（${DAILY_MAX}次），请明天再来～` });
     }
-
-    // 计数 +1
     await REDIS(`/incr/${encodeURIComponent(limitKey)}`);
-    // 设置24小时过期
     await REDIS(`/expire/${encodeURIComponent(limitKey)}/86400`);
-
   } catch (limitErr) {
     console.error("限流检查失败:", limitErr);
-    // Redis 异常时放行，避免阻断业务
   }
 
   // ==========================================================
@@ -55,83 +48,48 @@ export default async function handler(req, res) {
   await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/used`);
 
   // ==========================================================
-  // 🤖 第四道防线：AI 分析（带重试机制）
+  // 🤖 第四道防线：调用百度智能云 API
   // ==========================================================
   const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
   const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
   const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
   try {
-    // 1. 百度人脸检测
-    const tokenRes = await fetch(`https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`);
-    const tokenData = await tokenRes.json();
+    // 1. 获取百度 Access Token
+    const tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`;
+    const tokenResponse = await fetch(tokenUrl);
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
 
-    const detectRes = await fetch(`https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${tokenData.access_token}`, {
+    // 2. 调用人脸检测 API
+    const detectUrl = `https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${accessToken}`;
+    const detectResponse = await fetch(detectUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imageBase64, image_type: 'BASE64', face_field: 'age,gender,beauty,faceshape,landmark150' })
+      body: JSON.stringify({
+        image: imageBase64,
+        image_type: 'BASE64',
+        face_field: 'age,gender,beauty,faceshape'
+      })
     });
-    const faceData = await detectRes.json();
-    const face = faceData.result.face_list[0];
 
-    // 2. 特征计算
-    const lm = face.landmark150;
-    const getPt = (name) => lm.find(p => p.name === name);
-    const top = getPt('contour_top').y;
-    const chin = getPt('contour_chin').y;
-    const browL = getPt('left_eyebrow_center').y;
-    const nose = getPt('nose_tip').y;
-    const faceH = chin - top;
+    const faceData = await detectResponse.json();
 
-    const features = {
-      shape: face.faceshape[0].type,
-      age: face.age,
-      beauty: Math.round(face.beauty.female_score || face.beauty.male_score),
-      upperRatio: ((browL - top) / faceH).toFixed(2),
-      lowerRatio: ((chin - nose) / faceH).toFixed(2),
-    };
-
-    // 3. 带重试的 DeepSeek 调用
-    async function callDeepSeekWithRetry(messages, retries = 3) {
-      for (let i = 0; i < retries; i++) {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 25000);
-
-          const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-            },
-            body: JSON.stringify({
-              model: 'deepseek-chat',
-              messages: messages,
-              temperature: 0.7
-            }),
-            signal: controller.signal
-          });
-
-          clearTimeout(timeoutId);
-
-          if (!response.ok) {
-            if (response.status === 429 || response.status >= 500) {
-              throw new Error(`Server busy: ${response.status}`);
-            }
-            throw new Error(`Fatal API Error: ${await response.text()}`);
-          }
-          return await response.json();
-        } catch (error) {
-          console.error(`DeepSeek attempt ${i + 1} failed:`, error.message);
-          if (i === retries - 1) {
-            throw new Error('AI 服务暂时不可用，请稍后再试');
-          }
-          const delay = Math.pow(2, i) * 1000;
-          await new Promise(r => setTimeout(r, delay));
-        }
-      }
+    if (faceData.error_code !== 0) {
+      throw new Error(faceData.error_msg || '百度API识别失败');
     }
 
+    const face = faceData.result.face_list[0];
+
+    // 3. 特征计算（适配百度返回的数据结构）
+    const features = {
+      shape: face.faceshape.type, // 脸型
+      age: face.age,
+      beauty: Math.round(face.beauty.female_score || face.beauty.male_score),
+      gender: face.gender.type
+    };
+
+    // 4. 调用 DeepSeek 生成建议
     const messages = [
       { role: 'system', content: '你是一位顶级的明星造型师，擅长根据面部特征给出具体的美妆和发型建议。语言要亲切、像闺蜜聊天一样，避免生硬的术语堆砌。' },
       { role: 'user', content: `请根据以下面部数据分析结果，生成一份详细的美妆建议报告（包含修容、眉形、腮红、唇妆、发型）：\n数据：${JSON.stringify(features, null, 2)}` }
@@ -144,8 +102,37 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Fatal Error:', error);
-    // 🔥 关键：AI 失败时回滚 Token，让用户能重试用
     await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/unused`);
     res.status(500).json({ error: error.message || '分析失败，请稍后重试' });
+  }
+}
+
+// DeepSeek 带重试调用（保持不变）
+async function callDeepSeekWithRetry(messages, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: messages,
+          temperature: 0.7
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error(`Server busy: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      console.error(`DeepSeek attempt ${i + 1} failed:`, error.message);
+      if (i === retries - 1) throw new Error('AI 服务暂时不可用，请稍后再试');
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+    }
   }
 }

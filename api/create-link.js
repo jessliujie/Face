@@ -1,40 +1,76 @@
-// api/create-link.js
+// api/analyze.js
 export default async function handler(req, res) {
-  // 1. 鉴权：只有你知道 Face2026，防止别人乱刷链接
-  const ADMIN_KEY = "Face2026"; // ✅ 已修改为纯字符串 Face2026（无编码问题）
-  const { key } = req.query;
+  const { imageBase64, token } = req.body;
+  if (!token) return res.status(400).json({ error: '缺少访问凭证' });
 
-  if (key !== ADMIN_KEY) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-
-  // 2. 连接 Upstash Redis
   const REDIS = u => fetch(`${process.env.UPSTASH_URL}${u}`, {
     headers: { Authorization: `Bearer ${process.env.UPSTASH_TOKEN}` }
   });
 
-  // 3. 生成随机 Token（16位大写字母数字）
-  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase();
+  // 1. Token 校验
+  const tokenRes = await (await REDIS(`/get/${encodeURIComponent(`token:${token}`)}`)).json();
+  if (!tokenRes.result || tokenRes.result === 'used') {
+    return res.status(410).json({ error: '链接已失效或已使用' });
+  }
 
-  // 4. 存入 Redis，状态为 unused，并设置 7 天过期（604800秒）
+  // 2. 限流
+  const today = new Date().toISOString().split('T')[0];
+  const limitKey = `limit:daily:${today}`;
+  const countRes = await (await REDIS(`/get/${encodeURIComponent(limitKey)}`)).json();
+  if (parseInt(countRes.result || '0') >= 200) {
+    return res.status(429).json({ error: '今日服务已达上限' });
+  }
+  await REDIS(`/incr/${encodeURIComponent(limitKey)}`);
+  await REDIS(`/expire/${encodeURIComponent(limitKey)}/86400`);
+
+  // 3. 标记 Token 已用
+  await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/used`);
+
+  // 4. 调用百度 AI
   try {
-    // 设置值
-    await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/unused`);
-    // 设置过期时间
-    await REDIS(`/expire/${encodeURIComponent(`token:${token}`)}/604800`);
+    const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
+    const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
+    const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
-    // 5. 返回给小红书自动发货的链接
-    const link = `https://face-jessii.vercel.app/?t=${token}`; // ✅ 已固定为 face-jessii.vercel.app
-    
-    // 如果是通过浏览器访问，直接显示；如果是API调用，返回JSON
-    if (req.headers.accept?.includes('text/html')) {
-      res.send(`<h1>Link Generated</h1><p><a href="${link}" target="_blank">${link}</a></p>`);
-    } else {
-      res.status(200).json({ link });
-    }
+    // 获取百度 Token
+    const baiDuTokenRes = await fetch(`https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`);
+    const baiDuToken = await baiDuTokenRes.json();
+
+    // 人脸检测
+    const detectRes = await fetch(`https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${baiDuToken.access_token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageBase64, image_type: 'BASE64', face_field: 'age,gender,beauty,faceshape' })
+    });
+    const faceData = await detectRes.json();
+    if (faceData.error_code !== 0) throw new Error(faceData.error_msg);
+
+    const face = faceData.result.face_list[0];
+    const features = {
+      shape: face.faceshape.type,
+      age: face.age,
+      beauty: Math.round(face.beauty.female_score || face.beauty.male_score),
+      gender: face.gender.type
+    };
+
+    // 调用 DeepSeek
+    const deepseekRes = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是顶级造型师，语言亲切如闺蜜。' },
+          { role: 'user', content: `根据数据给建议：${JSON.stringify(features)}` }
+        ]
+      })
+    });
+    const advice = (await deepseekRes.json()).choices[0].message.content;
+
+    res.json({ success: true, features, advice });
 
   } catch (error) {
-    console.error('Create Link Error:', error);
-    res.status(500).json({ error: '生成链接失败' });
+    await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/unused`); // 失败时回滚
+    res.status(500).json({ error: error.message || '分析失败' });
   }
 }

@@ -1,7 +1,7 @@
 // api/create-link.js
 export default async function handler(req, res) {
-  // 1. 鉴权：只有你知道 ADMIN_KEY，防止别人乱刷链接
-  const ADMIN_KEY = process.env.ADMIN_KEY;
+  // 1. 鉴权：只有你知道 Face/2006，防止别人乱刷链接
+  const ADMIN_KEY = "Face/2006"; // ✅ 已修改为硬编码 Face/2006
   const { key } = req.query;
 
   if (key !== ADMIN_KEY) {

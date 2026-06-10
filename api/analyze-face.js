@@ -1,43 +1,45 @@
 // api/analyze-face.js
 import fetch from 'node-fetch';
 
-// 缓存百度Token（避免重复请求）
-let cachedToken = { value: null, expiresAt: 0 };
-
 export default async function handler(req, res) {
-  // 1. CORS配置
+  // 1. CORS 配置
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // 2. 处理预检请求
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: '仅支持POST请求' });
+  if (req.method !== 'POST') return res.status(405).json({ error: '仅支持 POST 请求' });
 
   try {
-    // 3. 解析前端上传的图片
+    // 2. 解析 FormData 中的图片（修复 Vercel 兼容性问题）
     const imageBase64 = await parseFormData(req);
-    if (!imageBase64) return res.status(400).json({ error: '请上传有效的图片文件' });
+    if (!imageBase64) {
+      return res.status(400).json({ error: '请上传有效的图片文件（JPG/PNG）' });
+    }
 
-    // 4. 获取百度AI Token（带缓存）
+    // 3. 获取百度 Token
     const accessToken = await getBaiduToken();
-    if (!accessToken) return res.status(500).json({ error: 'AI服务认证失败' });
+    if (!accessToken) {
+      return res.status(500).json({ error: 'AI 服务认证失败，请检查密钥' });
+    }
 
-    // 5. 调用百度人脸检测
+    // 4. 调用百度人脸检测
     const detectResult = await callBaiduAPI(accessToken, imageBase64);
-    if (!detectResult.success) return res.status(400).json({ error: detectResult.error });
+    if (!detectResult.success) {
+      return res.status(400).json({ error: detectResult.error });
+    }
 
-    // 6. 格式化结果并返回
+    // 5. 格式化并返回结果
     const result = formatResult(detectResult.data);
     res.status(200).json({ success: true, ...result });
 
   } catch (error) {
-    console.error('分析失败:', error);
-    res.status(500).json({ error: '服务器内部错误，请稍后重试' });
+    console.error('💥 服务器内部错误:', error);
+    res.status(500).json({ error: '服务器开小差了，请稍后再试' });
   }
 }
 
-// 解析FormData（Vercel兼容版）
+// 解析 FormData（核心修复：兼容 Vercel 无 multer 环境）
 async function parseFormData(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -48,7 +50,7 @@ async function parseFormData(req) {
         const boundary = req.headers['content-type']?.split('boundary=')[1];
         if (!boundary) return resolve(null);
 
-        // 提取图片Base64
+        // 提取图片二进制数据
         const parts = buffer.toString().split(`--${boundary}`);
         const imagePart = parts.find(p => p.includes('filename=') && p.includes('Content-Type: image/'));
         if (!imagePart) return resolve(null);
@@ -57,7 +59,7 @@ async function parseFormData(req) {
         const base64End = imagePart.lastIndexOf('\r\n');
         let base64 = imagePart.substring(base64Start, base64End).replace(/\s/g, '');
 
-        // 验证Base64格式
+        // 验证 Base64 格式
         if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return resolve(null);
         resolve(base64);
       } catch (err) {
@@ -68,7 +70,8 @@ async function parseFormData(req) {
   });
 }
 
-// 获取百度Token（缓存29天）
+// 缓存百度 Token（减少请求次数）
+let cachedToken = { value: null, expiresAt: 0 };
 async function getBaiduToken() {
   const now = Date.now();
   if (cachedToken.value && cachedToken.expiresAt > now) return cachedToken.value;
@@ -84,15 +87,15 @@ async function getBaiduToken() {
     if (!data.access_token) return null;
 
     cachedToken.value = data.access_token;
-    cachedToken.expiresAt = now + 29 * 24 * 60 * 60 * 1000; // 29天
+    cachedToken.expiresAt = now + 29 * 24 * 60 * 60 * 1000; // 缓存 29 天
     return data.access_token;
   } catch (error) {
-    console.error('获取Token失败:', error);
+    console.error('获取 Token 失败:', error);
     return null;
   }
 }
 
-// 调用百度人脸检测API
+// 调用百度 API
 async function callBaiduAPI(accessToken, imageBase64) {
   try {
     const res = await fetch(
@@ -111,17 +114,16 @@ async function callBaiduAPI(accessToken, imageBase64) {
 
     const data = await res.json();
     if (data.error_code !== 0) {
-      return { success: false, error: `AI识别失败：${data.error_msg}` };
+      return { success: false, error: `AI 识别失败：${data.error_msg}` };
     }
-
     return { success: true, data: data.result };
   } catch (error) {
-    console.error('百度API调用失败:', error);
-    return { success: false, error: '调用AI服务失败' };
+    console.error('百度 API 调用失败:', error);
+    return { success: false, error: '调用 AI 服务超时' };
   }
 }
 
-// 格式化分析结果
+// 格式化结果
 function formatResult(baiduResult) {
   const face = baiduResult.face_list[0];
   const beautyScore = Math.round(
@@ -140,7 +142,7 @@ function formatResult(baiduResult) {
   return { features, advice };
 }
 
-// 生成个性化建议
+// 生成建议
 function generateAdvice(features) {
   const tips = {
     square: '方脸适合柔和线条发型（如大波浪），中和棱角。',

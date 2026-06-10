@@ -100,6 +100,23 @@
             box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
         }
         .hidden { display: none !important; }
+        .error-toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #ef4444;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 2000;
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from { top: -50px; opacity: 0; }
+            to { top: 20px; opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -161,6 +178,9 @@
         </div>
     </div>
 
+    <!-- Error Toast -->
+    <div id="errorToast" class="error-toast hidden"></div>
+
     <script>
         const fileInput = document.getElementById('fileInput');
         const uploadArea = document.getElementById('uploadArea');
@@ -171,12 +191,12 @@
         const resultModal = document.getElementById('resultModal');
         const loadingText = document.getElementById('loadingText');
         const progressBar = document.getElementById('progressBar');
+        const errorToast = document.getElementById('errorToast');
 
         let selectedFile = null;
 
         // Click to upload
         uploadArea.addEventListener('click', (e) => {
-            // Prevent triggering when clicking the analyze button
             if (e.target.closest('.btn-primary')) return;
             fileInput.click();
         });
@@ -202,11 +222,11 @@
 
         function handleFile(file) {
             if (!file.type.startsWith('image/')) {
-                alert('请上传图片文件！');
+                showError('请上传图片文件（JPG/PNG）');
                 return;
             }
             if (file.size > 5 * 1024 * 1024) {
-                alert('图片大小不能超过 5MB！');
+                showError('图片大小不能超过 5MB');
                 return;
             }
 
@@ -216,7 +236,7 @@
                 preview.src = e.target.result;
                 preview.classList.remove('hidden');
                 placeholder.classList.add('hidden');
-                analyzeBtn.disabled = false; // Enable button
+                analyzeBtn.disabled = false;
             };
             reader.readAsDataURL(file);
         }
@@ -241,13 +261,14 @@
             }, 400);
 
             try {
-                // Convert to Base64 (without prefix)
-                const base64 = await fileToBase64(selectedFile);
-                
+                // Create FormData
+                const formData = new FormData();
+                formData.append('image', selectedFile); // 字段名必须是 'image'
+
                 const response = await fetch('/api/analyze-face', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: base64 })
+                    body: formData,
+                    // 不要设置 Content-Type，让浏览器自动处理
                 });
 
                 clearInterval(interval);
@@ -255,15 +276,15 @@
 
                 if (!response.ok) {
                     const err = await response.json();
-                    throw new Error(err.error || '分析失败');
+                    throw new Error(err.error || `服务器错误 (${response.status})`);
                 }
 
                 const data = await response.json();
                 showResult(data);
 
             } catch (error) {
-                console.error('Error:', error);
-                alert('分析失败: ' + error.message);
+                console.error('分析失败:', error);
+                showError('分析失败: ' + error.message);
             } finally {
                 setTimeout(() => {
                     loadingModal.classList.add('hidden');
@@ -271,15 +292,6 @@
                 }, 500);
             }
         });
-
-        function fileToBase64(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = () => resolve(reader.result.split(',')[1]); // Remove prefix
-                reader.onerror = error => reject(error);
-            });
-        }
 
         function showResult(data) {
             const f = data.features || {};
@@ -306,6 +318,12 @@
             `;
             
             resultModal.classList.remove('hidden');
+        }
+
+        function showError(message) {
+            errorToast.textContent = message;
+            errorToast.classList.remove('hidden');
+            setTimeout(() => errorToast.classList.add('hidden'), 3000);
         }
 
         function closeResult() {

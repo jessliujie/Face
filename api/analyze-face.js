@@ -1,8 +1,8 @@
 // api/analyze-face.js
-import fetch from 'node-fetch'; // 确保 Vercel 环境有 fetch
+import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
-  // 1. 设置 CORS 头，允许前端跨域访问
+  // 1. 设置CORS头，允许前端跨域访问
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -12,19 +12,19 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // 2. 只允许 POST 请求
+  // 2. 只允许POST请求
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed - 请用 POST' });
   }
 
   try {
-    // 3. 从请求中获取图片文件（FormData）
+    // 3. 解析前端传来的FormData图片
     const formData = await new Promise((resolve, reject) => {
       const chunks = [];
       req.on('data', chunk => chunks.push(chunk));
       req.on('end', () => {
         const buffer = Buffer.concat(chunks);
-        // 简单解析 FormData (只取第一个文件)
+        // 简单解析FormData获取图片Base64
         const match = buffer.toString().match(/filename="(.+?)"\r\nContent-Type: (.+?)\r\n\r\n([\s\S]*?)\r\n------/);
         if (match) {
           const base64 = buffer.toString('base64').split(match[0])[1];
@@ -40,15 +40,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: '请上传图片文件' });
     }
 
-    // 4. 获取百度 AI 的 Access Token
-    const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
-    const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
+    // 4. 使用你提供的百度云密钥（已替换）
+    const BAIDU_API_KEY = 'sUTxkNaeHT3WjMaWDBWcsPr6';
+    const BAIDU_SECRET_KEY = '3bAamT8SPFzxfzfDtrv1aZHOuWHngQ8p';
 
-    if (!BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
-      console.error('❌ 环境变量缺失: BAIDU_API_KEY 或 BAIDU_SECRET_KEY');
-      return res.status(500).json({ error: '服务器配置错误，请联系管理员' });
-    }
-
+    // 5. 获取百度AI访问令牌
     const tokenRes = await fetch(
       `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`
     );
@@ -59,7 +55,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'AI 服务认证失败' });
     }
 
-    // 5. 调用百度人脸检测 API
+    // 6. 调用百度人脸检测API
     const detectRes = await fetch(
       `https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${tokenData.access_token}`,
       {
@@ -75,13 +71,13 @@ export default async function handler(req, res) {
 
     const detectData = await detectRes.json();
 
-    // 6. 检查百度 API 返回的错误
+    // 7. 处理百度API返回的错误
     if (detectData.error_code !== 0) {
       console.error('❌ 百度 API 报错:', detectData.error_msg);
       return res.status(400).json({ error: `AI 识别失败: ${detectData.error_msg}` });
     }
 
-    // 7. 提取数据
+    // 8. 提取人脸特征数据
     const face = detectData.result.face_list[0];
     const features = {
       shape: face.faceshape.type,
@@ -90,7 +86,7 @@ export default async function handler(req, res) {
       gender: face.gender.type
     };
 
-    // 8. 生成建议（这里可以接 DeepSeek，为了简化先用固定文案）
+    // 9. 生成变美建议（可后续替换为DeepSeek生成）
     const advice = `根据你的 ${features.shape} 脸型和 ${features.age} 岁的年龄特征：
 1. 脸型轮廓流畅，建议尝试法式空气刘海修饰额头。
 2. 妆容方面，重点突出五官立体感，使用修容加强下颌线。
@@ -98,7 +94,7 @@ export default async function handler(req, res) {
 
 ✨ 自信的你最美啦！`;
 
-    // 9. 返回给前端
+    // 10. 返回结果给前端
     return res.status(200).json({
       success: true,
       features: features,

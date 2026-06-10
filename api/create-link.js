@@ -1,7 +1,7 @@
 // api/create-link.js
 export default async function handler(req, res) {
-  // 1. 鉴权：只有你知道 Face/2006，防止别人乱刷链接
-  const ADMIN_KEY = "Face/2006"; // ✅ 已修改为硬编码 Face/2006
+  // 1. 鉴权：只有你知道 Face%2026，防止别人乱刷链接
+  const ADMIN_KEY = "Face%2026"; // ✅ 已修改为硬编码 Face%2026
   const { key } = req.query;
 
   if (key !== ADMIN_KEY) {
@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     await REDIS(`/expire/${encodeURIComponent(`token:${token}`)}/604800`);
 
     // 5. 返回给小红书自动发货的链接
-    const link = `${req.headers.origin || process.env.VERCEL_URL}/?t=${token}`;
+    const link = `https://face-jessii.vercel.app/?t=${token}`; // ✅ 已修改为固定域名
     
     // 如果是通过浏览器访问，直接显示；如果是API调用，返回JSON
     if (req.headers.accept?.includes('text/html')) {

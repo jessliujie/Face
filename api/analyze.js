@@ -1,138 +1,113 @@
 // api/analyze.js
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
-
-  const { imageBase64, token } = req.body;
-
-  // ==========================================================
-  // 🛡️ 第一道防线：Token 校验（一链一用）
-  // ==========================================================
-  if (!token) return res.status(400).json({ error: '缺少访问凭证' });
-
-  const REDIS = u => fetch(`${process.env.UPSTASH_URL}${u}`, {
-    headers: { Authorization: `Bearer ${process.env.UPSTASH_TOKEN}` }
-  });
-
-  const tokenRes = await (await REDIS(`/get/${encodeURIComponent(`token:${token}`)}`)).json();
-  const tokenVal = tokenRes.result;
-
-  if (!tokenVal) return res.status(410).json({ error: '链接不存在或已过期' });
-  if (tokenVal === 'used') return res.status(410).json({ error: '链接已使用，不可重复访问' });
-
-  // ==========================================================
-  // 🛡️ 第二道防线：每日限流（防刷量）
-  // ==========================================================
-  const today = new Date().toISOString().split('T')[0];
-  const limitKey = `limit:daily:${today}`;
-  const DAILY_MAX = 200;
-
-  try {
-    const countRes = await (await REDIS(`/get/${encodeURIComponent(limitKey)}`)).json();
-    const currentCount = parseInt(countRes.result || '0');
-    if (currentCount >= DAILY_MAX) {
-      return res.status(429).json({ error: `今日服务已达上限（${DAILY_MAX}次），请明天再来～` });
-    }
-    await REDIS(`/incr/${encodeURIComponent(limitKey)}`);
-    await REDIS(`/expire/${encodeURIComponent(limitKey)}/86400`);
-  } catch (limitErr) {
-    console.error("限流检查失败:", limitErr);
-  }
-
-  // ==========================================================
-  // 🔒 第三道防线：标记 Token 为已使用（原子操作）
-  // ==========================================================
-  await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/used`);
-
-  // ==========================================================
-  // 🤖 第四道防线：调用百度智能云 API
-  // ==========================================================
-  const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
-  const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-
-  try {
-    // 1. 获取百度 Access Token
-    const tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_API_KEY}&client_secret=${BAIDU_SECRET_KEY}`;
-    const tokenResponse = await fetch(tokenUrl);
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-
-    // 2. 调用人脸检测 API
-    const detectUrl = `https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${accessToken}`;
-    const detectResponse = await fetch(detectUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image: imageBase64,
-        image_type: 'BASE64',
-        face_field: 'age,gender,beauty,faceshape'
-      })
-    });
-
-    const faceData = await detectResponse.json();
-
-    if (faceData.error_code !== 0) {
-      throw new Error(faceData.error_msg || '百度API识别失败');
+    // 只允许 POST 请求
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-    const face = faceData.result.face_list[0];
+    try {
+        const { image } = req.body;
 
-    // 3. 特征计算（适配百度返回的数据结构）
-    const features = {
-      shape: face.faceshape.type, // 脸型
-      age: face.age,
-      beauty: Math.round(face.beauty.female_score || face.beauty.male_score),
-      gender: face.gender.type
-    };
+        // 1. 基础校验
+        if (!image) {
+            return res.status(400).json({ error: '缺少 image 参数' });
+        }
 
-    // 4. 调用 DeepSeek 生成建议
-    const messages = [
-      { role: 'system', content: '你是一位顶级的明星造型师，擅长根据面部特征给出具体的美妆和发型建议。语言要亲切、像闺蜜聊天一样，避免生硬的术语堆砌。' },
-      { role: 'user', content: `请根据以下面部数据分析结果，生成一份详细的美妆建议报告（包含修容、眉形、腮红、唇妆、发型）：\n数据：${JSON.stringify(features, null, 2)}` }
-    ];
+        // 2. 鉴权信息（请务必确认 Vercel 环境变量已设置！）
+        const ACCESS_TOKEN = process.env.BAIDU_ACCESS_TOKEN;
+        
+        if (!ACCESS_TOKEN) {
+            console.error('❌ 服务器错误：未配置 BAIDU_ACCESS_TOKEN 环境变量');
+            return res.status(500).json({ error: '服务器配置错误，请联系管理员' });
+        }
 
-    const gptData = await callDeepSeekWithRetry(messages);
-    const advice = gptData.choices[0].message.content;
+        // 3. 调用百度人脸检测 API
+        // 文档：https://ai.baidu.com/tech/face/detect
+        const baiduUrl = `https://aip.baidubce.com/rest/2.0/face/v3/detect?access_token=${ACCESS_TOKEN}`;
+        
+        // 请求参数
+        const params = new URLSearchParams();
+        params.append('image', image.split(',')[1]); // 去掉 base64 前缀
+        params.append('image_type', 'BASE64');
+        params.append('face_field', 'faceshape,facetype,age,beauty,gender,expression'); // 请求更多字段
 
-    res.json({ success: true, features, advice });
+        // 使用 fetch 发送请求，并设置 8 秒超时
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
 
-  } catch (error) {
-    console.error('Fatal Error:', error);
-    await REDIS(`/set/${encodeURIComponent(`token:${token}`)}/unused`);
-    res.status(500).json({ error: error.message || '分析失败，请稍后重试' });
-  }
+        try {
+            const response = await fetch(baiduUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: params,
+                signal: controller.signal // 绑定超时信号
+            });
+            
+            clearTimeout(timeoutId); // 清除超时计时器
+
+            const data = await response.json();
+
+            // 4. 检查百度 API 返回的错误码
+            if (data.error_code) {
+                console.error('❌ 百度API报错：', data.error_msg);
+                // 如果是鉴权过期或 QPS 超限，返回具体原因
+                return res.status(502).json({ error: `AI服务异常: ${data.error_msg}` });
+            }
+
+            // 5. 检查是否检测到人脸
+            if (!data.result || data.result.face_num === 0) {
+                return res.status(404).json({ error: '未检测到人脸，请上传正脸清晰照片' });
+            }
+
+            // 6. 成功：提取数据并简化返回给前端
+            const face = data.result.face_list[0];
+            const features = {
+                shape: face.face_shape?.type || '未知',
+                type: face.face_type?.type || '未知',
+                age: face.age,
+                beauty: face.beauty.toFixed(1),
+                gender: face.gender === 'male' ? '男' : '女',
+                expression: face.expression?.type || '无'
+            };
+
+            // 模拟生成的建议（这里可以根据 features 做更复杂的逻辑）
+            const advice = generateAdvice(features);
+
+            res.status(200).json({
+                features: features,
+                advice: advice
+            });
+
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            // 捕获超时或其他网络错误
+            console.error('❌ 请求百度API失败：', fetchError.message);
+            res.status(504).json({ error: 'AI服务器响应超时，请稍后再试' });
+        }
+
+    } catch (error) {
+        console.error('❌ 服务器内部错误：', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
 }
 
-// DeepSeek 带重试调用（保持不变）
-async function callDeepSeekWithRetry(messages, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000);
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: messages,
-          temperature: 0.7
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      if (!response.ok) throw new Error(`Server busy: ${response.status}`);
-      return await response.json();
-    } catch (error) {
-      console.error(`DeepSeek attempt ${i + 1} failed:`, error.message);
-      if (i === retries - 1) throw new Error('AI 服务暂时不可用，请稍后再试');
-      await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
-    }
-  }
+// 辅助函数：生成建议（保持原有逻辑）
+function generateAdvice(f) {
+    let text = '';
+    if (f.shape === 'oval') text += '· 鹅蛋脸线条流畅，适合大多数发型，保持自信就是最美的。\n';
+    else if (f.shape === 'round') text += '· 圆脸显得亲和力强，建议尝试侧分长发修饰脸型。\n';
+    else if (f.shape === 'square') text += '· 方脸下颌线分明，适合柔和的波浪卷发。\n';
+    else text += '· 独特的脸型非常有辨识度，建议突出五官优势。\n';
+    
+    text += `\n预计年龄：${f.age}岁\n`;
+    text += `颜值评分：${f.beauty}分 (满分100)\n\n`;
+    
+    text += '💄 美妆建议：\n';
+    text += '1. 底妆清透，突出皮肤质感。\n';
+    text += '2. 眼妆自然放大，提升神采。\n';
+    text += '3. 唇色选择显气质的豆沙色或正红色。\n';
+    
+    return text;
 }

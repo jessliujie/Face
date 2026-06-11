@@ -1,7 +1,22 @@
 {
-  "name": "face-ai",
+  "name": "social-vibe-test",
   "version": "1.0.0",
+  "description": "AI 社交磁场与距离感测评 (自动发货版)",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
   "dependencies": {
-    "node-fetch": "^2.6.7"
+    "@upstash/redis": "^1.25.0",
+    "axios": "^1.6.0",
+    "openai": "^4.20.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "vercel": "^32.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0 <21.0.0"
   }
 }
